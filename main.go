@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"net/http"
@@ -13,7 +14,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/justinas/alice"
-	_ "github.com/lib/pq"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func imAnIdiot(h http.Handler) http.Handler {
@@ -63,21 +64,109 @@ func (ah appHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func listStreamsHandler(e *env, w http.ResponseWriter, r *http.Request) error {
-	var streams []stream
-	err := e.db.Select(&streams, `
-	SELECT id, name, is_public, start_at, end_at`)
+// Returns specific stream id if mux var exists, else returns all
+func getStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
+	const streamSQL = `
+		SELECT
+			id, name, is_public, start_at, end_at
+		FROM
+			streams
+	`
+
+	var err error
+	vars := mux.Vars(r)
+
+	if id, ok := vars["id"]; ok { // Specific id
+		var s stream
+		err := e.db.Get(&s, streamSQL+`WHERE id=?`, id)
+		if err == sql.ErrNoRows {
+			return statusError{
+				404,
+				err,
+			}
+		} else if err != nil {
+			log.Errorf("Error querying for stream: %s", err.Error())
+			return err
+		}
+		err = json.NewEncoder(w).Encode(&s)
+	} else { // List all streams
+		var streams []stream
+		err := e.db.Select(&streams, streamSQL)
+		if err != nil {
+			log.Errorf("Error querying for stream(s): %s", err.Error())
+			return err
+		}
+		err = json.NewEncoder(w).Encode(streams)
+	}
+
+	if err != nil {
+		log.Errorf("Error encoding json: %s", err.Error())
+		return err
+	}
+	return nil
+}
+
+func createStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
+	tx, err := e.db.Begin()
 	if err != nil {
 		return err
 	}
 
-	json.NewEncoder(w).Encode(streams)
+	var s stream
+
+	dec := json.NewDecoder(r.Body)
+
+	err = dec.Decode(&s)
+	if err != nil {
+		log.Debugf("Error decoding JSON: %s", err.Error())
+		return statusError{
+			400,
+			err,
+		}
+	}
+
+	result, err := tx.Exec(`
+		INSERT INTO streams (
+			name, is_public, start_at, end_at
+		) VALUES (
+			?, ?, ?, ?
+		)`,
+		s.Name, s.IsPublic, s.StartAt, s.EndAt,
+	)
+	if err != nil {
+		rerr := tx.Rollback()
+		if rerr != nil {
+			log.Fatalf("Error rolling back failed transaction: %s", err.Error())
+			return rerr
+		}
+		return err
+	}
+	cerr := tx.Commit()
+	if cerr != nil {
+		log.Errorf("Error comitting transaction: %s", err.Error())
+		return err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		log.Errorf("Error retrieving ID of inserted row: %s", err.Error())
+		return nil // Todo: maybe not return 200 here.
+	}
+
+	s.ID = int(id)
+
+	err = json.NewEncoder(w).Encode(s)
+	if err != nil {
+		log.Errorf("Error encoding json: %s" + err.Error())
+	}
+
 	return nil
 }
 
 type config struct {
 	DBURL      string
 	ListenAddr string
+	Verbose    bool
 }
 
 func main() {
@@ -85,12 +174,18 @@ func main() {
 
 	// Flags
 	var configFile = *flag.String("config", "config.toml", "Path to config file")
+	var verbose = *flag.Bool("verbose", false, "Show debug messages")
 	flag.Parse()
 
 	// Parse config
 	var conf config
 	if _, err := toml.DecodeFile(configFile, &conf); err != nil {
 		log.Fatalf("Error reading config file: %s", err.Error())
+	}
+
+	if verbose || conf.Verbose {
+		log.SetLevel(log.DebugLevel)
+		log.Debug("Being verbose...")
 	}
 
 	// Parse DB URL
@@ -100,7 +195,17 @@ func main() {
 	}
 
 	// Connect to DB...
-	db, err := sqlx.Connect("postgres", dburl.String())
+	var (
+		dbDriver, dbInfo string
+	)
+	switch dburl.Scheme {
+	case "sqlite3":
+		dbDriver, dbInfo = "sqlite3", dburl.Host+dburl.Path
+	case "postgresql":
+		dbDriver, dbInfo = "postgres", dburl.String()
+	}
+	log.Infof("Connecting to db with driver %s and details %s...", dbDriver, dbInfo)
+	db, err := sqlx.Connect(dbDriver, dbInfo)
 	if err != nil {
 		log.Fatalf("Error connecting to DB: %s", err.Error())
 	}
@@ -108,7 +213,9 @@ func main() {
 	commonHandlers := alice.New(imAnIdiot)
 
 	router := mux.NewRouter()
-	router.Handle("/streams", appHandler{&env{db}, listStreamsHandler}).Methods("GET")
+	router.Handle("/streams", appHandler{&env{db}, getStreamHandler}).Methods("GET")
+	router.Handle("/streams/{id}", appHandler{&env{db}, getStreamHandler}).Methods("GET")
+	router.Handle("/streams", appHandler{&env{db}, createStreamHandler}).Methods("POST")
 
 	log.Infof("Listening on %s", conf.ListenAddr)
 	err = http.ListenAndServe(conf.ListenAddr, commonHandlers.Then(router))

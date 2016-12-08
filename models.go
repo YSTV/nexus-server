@@ -1,11 +1,9 @@
 package main
 
-import "github.com/lib/pq"
-
 type stream struct {
-	ID       int         `db:"id"`
-	Name     string      `db:"name"`
-	IsPublic bool        `db:"is_public"`
-	StartAt  pq.NullTime `db:"start_at"`
-	EndAt    pq.NullTime `db:"start_at"`
+	ID       int      `db:"id" json:"id"`
+	Name     string   `db:"name" json:"name"`
+	IsPublic bool     `db:"is_public" json:"is_public"`
+	StartAt  nullTime `db:"start_at" json:"start_at"`
+	EndAt    nullTime `db:"end_at" json:"end_at"`
 }
