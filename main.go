@@ -17,6 +17,13 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+func addCORSHeaders(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Access-Control-Allow-Origin", "*")
+		h.ServeHTTP(w, r)
+	})
+}
+
 func imAnIdiot(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Request: %s", r.URL.String())
@@ -210,7 +217,7 @@ func main() {
 		log.Fatalf("Error connecting to DB: %s", err.Error())
 	}
 
-	commonHandlers := alice.New(imAnIdiot)
+	commonHandlers := alice.New(imAnIdiot, addCORSHeaders)
 
 	router := mux.NewRouter()
 	router.Handle("/streams", appHandler{&env{db}, getStreamHandler}).Methods("GET")
