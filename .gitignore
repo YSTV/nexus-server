@@ -1,0 +1,5 @@
+nexus-server
+config.toml
+gin-bin
+*.swp
+dev.db
