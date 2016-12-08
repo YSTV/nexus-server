@@ -97,7 +97,7 @@ func getStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 		}
 		err = json.NewEncoder(w).Encode(&s)
 	} else { // List all streams
-		var streams []stream
+		streams := make([]stream, 0)
 		err := e.db.Select(&streams, streamSQL)
 		if err != nil {
 			log.Errorf("Error querying for stream(s): %s", err.Error())
@@ -162,7 +162,7 @@ func createStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 
 	s.ID = int(id)
 
-	err = json.NewEncoder(w).Encode(s)
+	err = json.NewEncoder(w).Encode(&s)
 	if err != nil {
 		log.Errorf("Error encoding json: %s" + err.Error())
 	}
