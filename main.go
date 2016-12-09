@@ -10,19 +10,13 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/BurntSushi/toml"
+	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/justinas/alice"
 	_ "github.com/mattn/go-sqlite3"
 )
-
-func addCORSHeaders(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Add("Access-Control-Allow-Origin", "*")
-		h.ServeHTTP(w, r)
-	})
-}
 
 func logRequestMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +211,13 @@ func main() {
 		log.Fatalf("Error connecting to DB: %s", err.Error())
 	}
 
-	commonHandlers := alice.New(logRequestMiddleware, addCORSHeaders)
+	commonHandlers := alice.New(
+		logRequestMiddleware,
+		handlers.CORS(
+			//handlers.AllowedOrigins([]string{"*"}),
+			handlers.AllowedMethods([]string{"GET", "POST", "DELETE", "OPTIONS"}),
+		),
+	)
 
 	router := mux.NewRouter()
 	router.Handle("/streams", appHandler{&env{db}, getStreamHandler}).Methods("GET")
