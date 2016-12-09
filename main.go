@@ -24,9 +24,9 @@ func addCORSHeaders(h http.Handler) http.Handler {
 	})
 }
 
-func imAnIdiot(h http.Handler) http.Handler {
+func logRequestMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Request: %s", r.URL.String())
+		log.Infof("Request: %s %s", r.Method, r.URL.String())
 		h.ServeHTTP(w, r)
 	})
 }
@@ -217,7 +217,7 @@ func main() {
 		log.Fatalf("Error connecting to DB: %s", err.Error())
 	}
 
-	commonHandlers := alice.New(imAnIdiot, addCORSHeaders)
+	commonHandlers := alice.New(logRequestMiddleware, addCORSHeaders)
 
 	router := mux.NewRouter()
 	router.Handle("/streams", appHandler{&env{db}, getStreamHandler}).Methods("GET")
