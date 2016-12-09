@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"net/http"
 	"net/url"
@@ -104,6 +105,37 @@ func getStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 		log.Errorf("Error encoding json: %s", err.Error())
 		return err
 	}
+	return nil
+}
+
+func deleteStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
+	const deleteSQL = `
+		DELETE FROM streams WHERE id=?
+	`
+
+	id, ok := mux.Vars(r)["id"]
+	if !ok { // No id in URL. Shouldn't happen as mux does matching
+		return statusError{
+			400,
+			errors.New("No id in URL"),
+		}
+	}
+
+	result, err := e.db.Exec(deleteSQL, id)
+	if err != nil {
+		return err
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		log.Warnf("Unable to get number of rows affected: %s", err)
+		return nil // Delete still happened though, so don't error
+	}
+
+	if n == 0 {
+		http.Error(w, "Not found", http.StatusNotFound)
+	}
+
 	return nil
 }
 
@@ -222,6 +254,7 @@ func main() {
 	router := mux.NewRouter()
 	router.Handle("/streams", appHandler{&env{db}, getStreamHandler}).Methods("GET")
 	router.Handle("/streams/{id}", appHandler{&env{db}, getStreamHandler}).Methods("GET")
+	router.Handle("/streams/{id}", appHandler{&env{db}, deleteStreamHandler}).Methods("DELETE")
 	router.Handle("/streams", appHandler{&env{db}, createStreamHandler}).Methods("POST")
 
 	log.Infof("Listening on %s", conf.ListenAddr)
