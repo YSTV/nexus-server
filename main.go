@@ -229,6 +229,30 @@ func createStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// Handle requests originating from nginx-rtmp's on_publish feature. Validate a stream's name and key
+// against the database.
+func rpcHandleStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
+	var s stream
+	if r.FormValue("name") == "" {
+		return statusError{
+			400,
+			errors.New("No stream name"),
+		}
+	}
+	err := e.db.Get(&s, "SELECT * FROM streams WHERE stream_name = ?", r.FormValue("name"))
+	if err == sql.ErrNoRows {
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if s.Key != r.FormValue("key") { // The key passed in the stream URL
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil
+	}
+	return nil
+}
+
 type config struct {
 	DBURL      string
 	ListenAddr string
@@ -285,10 +309,15 @@ func main() {
 	)
 
 	router := mux.NewRouter()
-	router.Handle("/streams", appHandler{&env{db}, getStreamHandler}).Methods("GET")
-	router.Handle("/streams/{id}", appHandler{&env{db}, getStreamHandler}).Methods("GET")
-	router.Handle("/streams/{id}", appHandler{&env{db}, deleteStreamHandler}).Methods("DELETE")
-	router.Handle("/streams", appHandler{&env{db}, createStreamHandler}).Methods("POST")
+
+	apiRouter := router.PathPrefix("/v1/api/").Subrouter()
+	apiRouter.Handle("/streams", appHandler{&env{db}, getStreamHandler}).Methods("GET")
+	apiRouter.Handle("/streams/{id}", appHandler{&env{db}, getStreamHandler}).Methods("GET")
+	apiRouter.Handle("/streams/{id}", appHandler{&env{db}, deleteStreamHandler}).Methods("DELETE")
+	apiRouter.Handle("/streams", appHandler{&env{db}, createStreamHandler}).Methods("POST")
+
+	rpcRouter := router.PathPrefix("/v1/rpc/").Subrouter()
+	rpcRouter.Handle("/handle_stream", appHandler{&env{db}, rpcHandleStreamHandler})
 
 	log.Infof("Listening on %s", conf.ListenAddr)
 	err = http.ListenAndServe(conf.ListenAddr, commonHandlers.Then(router))
