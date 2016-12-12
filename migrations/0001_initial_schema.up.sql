@@ -1,7 +1,9 @@
 CREATE TABLE "streams" (
     id INTEGER PRIMARY KEY,
-    name VARCHAR(255),
+    display_name VARCHAR(255),
     is_public BOOLEAN,
     start_at DATETIME,
-    end_at DATETIME
+    end_at DATETIME,
+    stream_name VARCHAR(255) NOT NULL UNIQUE,
+    key VARCHAR(255) NOT NULL
 );

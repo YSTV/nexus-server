@@ -93,7 +93,7 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 func getStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 	const streamSQL = `
 		SELECT
-			id, name, is_public, start_at, end_at
+			id, display_name, is_public, start_at, end_at, stream_name, key
 		FROM
 			streams
 	`
@@ -181,13 +181,23 @@ func createStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
+	if s.Key != "" { // Client not allowed to specify key
+
+		return statusError{
+			400,
+			errors.New("Client-specified key not allowed"),
+		}
+	}
+
+	s.Key = randomString(20)
+
 	result, err := tx.Exec(`
 		INSERT INTO streams (
-			name, is_public, start_at, end_at
+			display_name, is_public, start_at, end_at, stream_name, key
 		) VALUES (
-			?, ?, ?, ?
+			?, ?, ?, ?, ?, ?
 		)`,
-		s.Name, s.IsPublic, s.StartAt, s.EndAt,
+		s.DisplayName, s.IsPublic, s.StartAt, s.EndAt, s.StreamName, s.Key,
 	)
 	if err != nil {
 		rerr := tx.Rollback()
