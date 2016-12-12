@@ -57,13 +57,36 @@ func (ah appHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	err := ah.H(ah.env, w, r)
 	if err != nil {
 		log.Println(err.Error())
-		switch e := err.(type) {
-		case appError:
-			http.Error(w, e.Error(), e.Status())
-		default:
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		}
+		writeError(w, r, err)
 	}
+}
+
+func writeError(w http.ResponseWriter, r *http.Request, err error) {
+	var errStatus int
+	var errMessage string
+
+	switch e := err.(type) {
+	case appError:
+		errStatus, errMessage = e.Status(), e.Error()
+	default:
+		errStatus, errMessage = http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError)
+	}
+	if true { // TODO: replace with content-type detections
+		w.WriteHeader(errStatus)
+		enc := json.NewEncoder(w)
+		err := enc.Encode(struct {
+			Error string `json:"error"`
+		}{
+			errMessage,
+		})
+		if err == nil {
+			return // encoded error as json, so we're done
+		}
+		// Otherwise, drop through and fall back to text response
+		log.Warnf("Unable to encode error JSON! %s", err.Error())
+	}
+
+	http.Error(w, errMessage, errStatus)
 }
 
 // Returns specific stream id if mux var exists, else returns all
