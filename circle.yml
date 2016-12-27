@@ -1,5 +1,8 @@
-dependencies:
-    override:
-        # './...' is a relative pattern which means all subdirectories
-        - go get -t -d -v ./...
-        - go build -v --tags "libsqlite3 linux"
+deployment:
+    release:
+        branch: master
+        commands:
+            - go get github.com/mitchellh/gox
+            - go get github.com/tcnksm/ghr
+            - gox -output "dist/nexus-server_{{.OS}}_{{.Arch}}"
+            - ghr -t $GITHUB_GHR_TOKEN -u $CIRCLE_PROJECT_USERNAME -r $CIRCLE_PROJECT_REPONAME -delete `git describe --tags` dist/
