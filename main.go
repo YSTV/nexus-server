@@ -45,7 +45,8 @@ func (e statusError) Status() int {
 }
 
 type env struct {
-	db *sqlx.DB
+	db                              *sqlx.DB
+	updatesWSHub, streamStatusWSHub *Hub
 }
 
 type appHandler struct {
@@ -61,7 +62,7 @@ func (ah appHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func writeError(w http.ResponseWriter, r *http.Request, err error) {
+func writeError(w http.ResponseWriter, _ *http.Request, err error) {
 	var errStatus int
 	var errMessage string
 
@@ -253,6 +254,20 @@ func rpcHandleStreamHandler(e *env, w http.ResponseWriter, r *http.Request) erro
 	return nil
 }
 
+func updatesHandler(e *env, w http.ResponseWriter, r *http.Request) error {
+	if err := e.updatesWSHub.handleRequest(w, r); err != nil {
+		return err
+	}
+	return nil
+}
+
+func streamStatusHandler(e *env, w http.ResponseWriter, r *http.Request) error {
+	if err := e.streamStatusWSHub.handleRequest(w, r); err != nil {
+		return err
+	}
+	return nil
+}
+
 type config struct {
 	DBURL      string
 	ListenAddr string
@@ -300,6 +315,21 @@ func main() {
 		log.Fatalf("Error connecting to DB: %s", err.Error())
 	}
 
+	e := &env{
+		db:                db,
+		updatesWSHub:      newHub(),
+		streamStatusWSHub: newHub(),
+	}
+
+	// For now, broadcast any stream status updates to all clients
+	e.streamStatusWSHub.setIncomingHandler(func(m *Message) {
+		log.Infof("Message from %s: %s", m.remoteAddr, string(m.data))
+		e.updatesWSHub.broadcast <- m.data
+	})
+
+	go e.updatesWSHub.run()
+	go e.streamStatusWSHub.run()
+
 	commonHandlers := alice.New(
 		logRequestMiddleware,
 		handlers.CORS(
@@ -309,15 +339,17 @@ func main() {
 	)
 
 	router := mux.NewRouter()
+	router.Handle("/v1/ws/updates", appHandler{e, updatesHandler})
+	router.Handle("/v1/ws/streamstatus", appHandler{e, streamStatusHandler})
 
 	apiRouter := router.PathPrefix("/v1/api/").Subrouter()
-	apiRouter.Handle("/streams", appHandler{&env{db}, getStreamHandler}).Methods("GET")
-	apiRouter.Handle("/streams/{id}", appHandler{&env{db}, getStreamHandler}).Methods("GET")
-	apiRouter.Handle("/streams/{id}", appHandler{&env{db}, deleteStreamHandler}).Methods("DELETE")
-	apiRouter.Handle("/streams", appHandler{&env{db}, createStreamHandler}).Methods("POST")
+	apiRouter.Handle("/streams", appHandler{e, getStreamHandler}).Methods("GET")
+	apiRouter.Handle("/streams/{id}", appHandler{e, getStreamHandler}).Methods("GET")
+	apiRouter.Handle("/streams/{id}", appHandler{e, deleteStreamHandler}).Methods("DELETE")
+	apiRouter.Handle("/streams", appHandler{e, createStreamHandler}).Methods("POST")
 
 	rpcRouter := router.PathPrefix("/v1/rpc/").Subrouter()
-	rpcRouter.Handle("/handle_stream", appHandler{&env{db}, rpcHandleStreamHandler})
+	rpcRouter.Handle("/handle_stream", appHandler{e, rpcHandleStreamHandler})
 
 	log.Infof("Listening on %s", conf.ListenAddr)
 	err = http.ListenAndServe(conf.ListenAddr, commonHandlers.Then(router))
