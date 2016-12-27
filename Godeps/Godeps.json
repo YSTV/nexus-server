@@ -62,8 +62,8 @@
 		},
 		{
 			"ImportPath": "github.com/mattn/go-sqlite3",
-			"Comment": "v1.1.0-27-g5651a9d",
-			"Rev": "5651a9d9d49ec25811d08220ee972080378d52ea"
+			"Comment": "v1.2.0-10-g2d44dec",
+			"Rev": "2d44decb4941c9cdf72c22297b7890faf7da9bcb"
 		},
 		{
 			"ImportPath": "github.com/sirupsen/logrus",
@@ -73,6 +73,10 @@
 		{
 			"ImportPath": "github.com/ystv/nexus-common",
 			"Rev": "58e222a100fd2e0e3a19b6f67bb540bb85c31308"
+		},
+		{
+			"ImportPath": "golang.org/x/net/context",
+			"Rev": "45e771701b814666a7eb299e6c7a57d0b1799e91"
 		}
 	]
 }
