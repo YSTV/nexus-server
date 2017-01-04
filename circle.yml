@@ -1,10 +1,7 @@
 deployment:
     release:
-        branch: master
+        tag: /v[0-9]+(\.[0-9]+)*/
         commands:
-            - sudo apt-get install libc6-dev-i386
-            - go get github.com/mitchellh/gox
-            - gox -output "dist/nexus-server_{{.OS}}_{{.Arch}}" -osarch="linux/amd64 linux/386"
-            - wget https://github.com/tcnksm/ghr/releases/download/v0.5.3/ghr_v0.5.3_linux_amd64.zip
-            - unzip ghr_v0.5.3_linux_amd64.zip
-            - ./ghr -t $GITHUB_GHR_TOKEN -u $CIRCLE_PROJECT_USERNAME -r $CIRCLE_PROJECT_REPONAME -delete `git describe --tags` dist/
+            - ./scripts/build.sh # Cross compile binaries for various architectures
+            - ./scripts/package.sh # Build packages
+            - ./scripts/upload-artifacts.sh # Upload everything to github

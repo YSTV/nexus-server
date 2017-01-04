@@ -1,0 +1,14 @@
+[Unit]
+Description=Nexus-server is the hub of the Nexus livestream managing system.
+After=network-online.target
+
+[Service]
+User=nexus-server
+Group=nexus-server
+ExecStart=/usr/bin/nexus-server -config /etc/nexus-server.conf
+KillMode=control-group
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+Alias=nexus-server.service
