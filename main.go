@@ -5,19 +5,33 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"net/http"
-	"net/url"
-
-	log "github.com/sirupsen/logrus"
+	"os"
+	"path"
+	"strconv"
 
 	"github.com/BurntSushi/toml"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
-	_ "github.com/joho/godotenv/autoload"
 	"github.com/justinas/alice"
-	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/mattes/migrate/file"
+	"github.com/mattes/migrate/migrate"
+	"github.com/mattes/migrate/migrate/direction"
+	"github.com/mattes/migrate/pipe"
+
+	_ "github.com/mattes/migrate/driver/ql"
+	_ "github.com/cznic/ql"
+
+	log "github.com/sirupsen/logrus"
+
 )
+
+const DBFILENAME = "data.db"
+
+var VERSION = "" // Should be automatically inserted by linker during build
 
 func logRequestMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +108,7 @@ func writeError(w http.ResponseWriter, _ *http.Request, err error) {
 func getStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 	const streamSQL = `
 		SELECT
-			id, display_name, is_public, start_at, end_at, stream_name, key
+			id() as id, display_name, is_public, start_at, end_at, stream_name, key
 		FROM
 			streams
 	`
@@ -104,7 +118,7 @@ func getStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 
 	if id, ok := vars["id"]; ok { // Specific id
 		var s stream
-		err := e.db.Get(&s, streamSQL+`WHERE id=?`, id)
+		err := e.db.Get(&s, streamSQL+`WHERE id()=$1`, id)
 		if err == sql.ErrNoRows {
 			return statusError{
 				404,
@@ -134,7 +148,7 @@ func getStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 
 func deleteStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 	const deleteSQL = `
-		DELETE FROM streams WHERE id=?
+		DELETE FROM streams WHERE id()=$1
 	`
 
 	id, ok := mux.Vars(r)["id"]
@@ -144,9 +158,27 @@ func deleteStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 			errors.New("No id in URL"),
 		}
 	}
-
-	result, err := e.db.Exec(deleteSQL, id)
+	intID, err := strconv.Atoi(id)
 	if err != nil {
+		return statusError{
+			400,
+			errors.New("Non-numeric ID in URL"),
+		}
+	}
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return err
+	}
+	result, err := tx.Exec(deleteSQL, int64(intID))
+	if err != nil {
+		if err := tx.Rollback(); err != nil {
+			return err
+		}
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 
@@ -196,7 +228,7 @@ func createStreamHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 		INSERT INTO streams (
 			display_name, is_public, start_at, end_at, stream_name, key
 		) VALUES (
-			?, ?, ?, ?, ?, ?
+			$1, $2, $3, $4, $5, $6
 		)`,
 		s.DisplayName, s.IsPublic, s.StartAt, s.EndAt, s.StreamName, s.Key,
 	)
@@ -240,7 +272,7 @@ func rpcHandleStreamHandler(e *env, w http.ResponseWriter, r *http.Request) erro
 			errors.New("No stream name"),
 		}
 	}
-	err := e.db.Get(&s, "SELECT * FROM streams WHERE stream_name = ?", r.FormValue("name"))
+	err := e.db.Get(&s, "SELECT * FROM streams WHERE stream_name = $1", r.FormValue("name"))
 	if err == sql.ErrNoRows {
 		w.WriteHeader(http.StatusUnauthorized)
 		return nil
@@ -268,19 +300,64 @@ func streamStatusHandler(e *env, w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+func runMigrations(dbURL, migrationsPath string) {
+	log.Info("Applying migrations")
+	pipe := pipe.New()
+	go migrate.Up(pipe, "ql+" + dbURL, migrationsPath)
+	ok := true
+	OuterLoop:
+	for {
+		select {
+		case item, more := <-pipe:
+			if !more {
+				break OuterLoop
+			}
+			switch item.(type) {
+			case error:
+				log.Errorf("Error migrating: %s", item.(error).Error())
+				ok = false
+			case file.File:
+				f:= item.(file.File)
+				var dir string
+				if f.Direction == direction.Up {
+					dir = "up"
+				} else if f.Direction == direction.Down {
+					dir = "down"
+				}
+				log.Infof("Applying %s migration: %s", dir, f.Name)
+			}
+		}
+	}
+	if !ok {
+		log.Fatal("Errors while migrating database. See above for details")
+	}
+
+}
+
 type config struct {
-	DBURL      string
-	ListenAddr string
-	Verbose    bool
+	Log struct {
+		Verbose bool // Make more logging noise
+	}
+	API struct {
+		Listen string // Listen address of HTTP API server
+	}
+	Data struct {
+		MigrationsDir string
+		Dir string // Path to directory to store db
+	}
 }
 
 func main() {
-	log.Info("Starting up")
-
 	// Flags
 	var configFile = *flag.String("config", "config.toml", "Path to config file")
-	var verbose = *flag.Bool("verbose", false, "Show debug messages")
+	var verbose = flag.Bool("verbose", false, "Show debug messages")
+	var version = flag.Bool("version", false, "Show version")
 	flag.Parse()
+
+	if *version == true {
+		fmt.Printf("Nexus Server %s\n", VERSION)
+		os.Exit(0)
+	}
 
 	// Parse config
 	var conf config
@@ -288,29 +365,20 @@ func main() {
 		log.Fatalf("Error reading config file: %s", err.Error())
 	}
 
-	if verbose || conf.Verbose {
+	if (*verbose == true) || conf.Log.Verbose {
 		log.SetLevel(log.DebugLevel)
 		log.Debug("Being verbose...")
 	}
-
-	// Parse DB URL
-	dburl, err := url.Parse(conf.DBURL)
-	if err != nil {
-		log.Fatalf("Error parsing database URL: %s" + err.Error())
+	if !path.IsAbs(conf.Data.Dir) {
+		log.Warnf("Using relative path to data directory: %s", conf.Data.Dir)
 	}
 
-	// Connect to DB...
-	var (
-		dbDriver, dbInfo string
-	)
-	switch dburl.Scheme {
-	case "sqlite3":
-		dbDriver, dbInfo = "sqlite3", dburl.Host+dburl.Path
-	case "postgresql":
-		dbDriver, dbInfo = "postgres", dburl.String()
-	}
-	log.Infof("Connecting to db with driver %s and details %s...", dbDriver, dbInfo)
-	db, err := sqlx.Connect(dbDriver, dbInfo)
+	dbURL := "file://"+path.Join(conf.Data.Dir, DBFILENAME)
+
+	// Apply database migrations
+	runMigrations(dbURL, conf.Data.MigrationsDir)
+
+	db, err := sqlx.Connect("ql", dbURL)
 	if err != nil {
 		log.Fatalf("Error connecting to DB: %s", err.Error())
 	}
@@ -351,8 +419,8 @@ func main() {
 	rpcRouter := router.PathPrefix("/v1/rpc/").Subrouter()
 	rpcRouter.Handle("/handle_stream", appHandler{e, rpcHandleStreamHandler})
 
-	log.Infof("Listening on %s", conf.ListenAddr)
-	err = http.ListenAndServe(conf.ListenAddr, commonHandlers.Then(router))
+	log.Infof("Listening on %s", conf.API.Listen)
+	err = http.ListenAndServe(conf.API.Listen, commonHandlers.Then(router))
 	if err != nil {
 		log.Fatalf("Error starting server: %s", err.Error())
 	}

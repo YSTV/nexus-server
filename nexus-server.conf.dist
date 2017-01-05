@@ -1,3 +1,9 @@
-DBURL="sqlite3://./dev.db"
-ListenAddr="127.0.0.1:1967"
-Verbose=true
+[log]
+    verbose = true
+
+[api]
+    listen = "127.0.0.1:1967"
+
+[data]
+    dir = "/var/lib/nexus-server/data"
+    migrationsdir = "/usr/lib/nexus-server/migrations" # DO NOT CHANGE UNLESS YOU KNOW WHAT YOU'RE DOING!

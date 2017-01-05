@@ -1,0 +1,9 @@
+[log]
+    verbose = true
+
+[api]
+    listen = "127.0.0.1:1967"
+
+[data]
+    dir = "./data" # Store data locally
+    migrationsdir = "./migrations" # We are developing locally, from inside the project directory

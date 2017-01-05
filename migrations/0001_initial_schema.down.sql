@@ -1,1 +1,1 @@
-DROP TABLE 'streams'
+DROP TABLE streams;

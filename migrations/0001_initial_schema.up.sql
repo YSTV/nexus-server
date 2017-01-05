@@ -1,9 +1,10 @@
-CREATE TABLE "streams" (
-    id INTEGER PRIMARY KEY,
-    display_name VARCHAR(255),
-    is_public BOOLEAN,
-    start_at DATETIME,
-    end_at DATETIME,
-    stream_name VARCHAR(255) NOT NULL UNIQUE,
-    key VARCHAR(255) NOT NULL
+CREATE TABLE streams (
+    display_name string,
+    is_public bool,
+    start_at time,
+    end_at time,
+    stream_name string NOT NULL,
+    key string NOT NULL
 );
+
+CREATE UNIQUE INDEX stream_name_unique ON streams (stream_name);
