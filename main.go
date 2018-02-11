@@ -17,21 +17,18 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/justinas/alice"
 
-	"github.com/mattes/migrate/file"
-	"github.com/mattes/migrate/migrate"
-	"github.com/mattes/migrate/migrate/direction"
-	"github.com/mattes/migrate/pipe"
+	"github.com/mattes/migrate"
+	"github.com/mattes/migrate/database/ql"
 
-	_ "github.com/mattes/migrate/driver/ql"
 	_ "github.com/cznic/ql"
+	_ "github.com/mattes/migrate/source/file"
 
 	log "github.com/sirupsen/logrus"
-
 )
 
-const DBFILENAME = "data.db"
+const dbfilename = "data.db"
 
-var VERSION = "" // Should be automatically inserted by linker during build
+var version = "" // Should be automatically inserted by linker during build
 
 func logRequestMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -287,51 +284,26 @@ func rpcHandleStreamHandler(e *env, w http.ResponseWriter, r *http.Request) erro
 }
 
 func updatesHandler(e *env, w http.ResponseWriter, r *http.Request) error {
-	if err := e.updatesWSHub.handleRequest(w, r); err != nil {
-		return err
-	}
-	return nil
+	return e.updatesWSHub.handleRequest(w, r)
 }
 
 func streamStatusHandler(e *env, w http.ResponseWriter, r *http.Request) error {
-	if err := e.streamStatusWSHub.handleRequest(w, r); err != nil {
-		return err
-	}
-	return nil
+	return e.streamStatusWSHub.handleRequest(w, r)
 }
 
-func runMigrations(dbURL, migrationsPath string) {
+func runMigrations(db *sql.DB, migrationsPath string) error {
 	log.Info("Applying migrations")
-	pipe := pipe.New()
-	go migrate.Up(pipe, "ql+" + dbURL, migrationsPath)
-	ok := true
-	OuterLoop:
-	for {
-		select {
-		case item, more := <-pipe:
-			if !more {
-				break OuterLoop
-			}
-			switch item.(type) {
-			case error:
-				log.Errorf("Error migrating: %s", item.(error).Error())
-				ok = false
-			case file.File:
-				f:= item.(file.File)
-				var dir string
-				if f.Direction == direction.Up {
-					dir = "up"
-				} else if f.Direction == direction.Down {
-					dir = "down"
-				}
-				log.Infof("Applying %s migration: %s", dir, f.Name)
-			}
-		}
+	driver, err := ql.WithInstance(db, &ql.Config{})
+	if err != nil {
+		return err
 	}
-	if !ok {
-		log.Fatal("Errors while migrating database. See above for details")
+	m, err := migrate.NewWithDatabaseInstance(
+		"file://"+migrationsPath,
+		"ql", driver)
+	if err != nil {
+		return err
 	}
-
+	return m.Up()
 }
 
 type config struct {
@@ -343,25 +315,25 @@ type config struct {
 	}
 	Data struct {
 		MigrationsDir string
-		Dir string // Path to directory to store db
+		Dir           string // Path to directory to store db
 	}
 }
 
 func main() {
 	// Flags
-	var configFile = *flag.String("config", "config.toml", "Path to config file")
+	var configFile = flag.String("config", "config.toml", "Path to config file")
 	var verbose = flag.Bool("verbose", false, "Show debug messages")
-	var version = flag.Bool("version", false, "Show version")
+	var showVersion = flag.Bool("version", false, "Show version")
 	flag.Parse()
 
-	if *version == true {
-		fmt.Printf("Nexus Server %s\n", VERSION)
+	if *showVersion == true {
+		fmt.Printf("Nexus Server %s\n", version)
 		os.Exit(0)
 	}
 
 	// Parse config
 	var conf config
-	if _, err := toml.DecodeFile(configFile, &conf); err != nil {
+	if _, err := toml.DecodeFile(*configFile, &conf); err != nil {
 		log.Fatalf("Error reading config file: %s", err.Error())
 	}
 
@@ -373,15 +345,15 @@ func main() {
 		log.Warnf("Using relative path to data directory: %s", conf.Data.Dir)
 	}
 
-	dbURL := "file://"+path.Join(conf.Data.Dir, DBFILENAME)
-
-	// Apply database migrations
-	runMigrations(dbURL, conf.Data.MigrationsDir)
+	dbURL := "file://" + path.Join(conf.Data.Dir, dbfilename)
 
 	db, err := sqlx.Connect("ql", dbURL)
 	if err != nil {
 		log.Fatalf("Error connecting to DB: %s", err.Error())
 	}
+
+	// Apply database migrations
+	runMigrations(db.DB, conf.Data.MigrationsDir)
 
 	e := &env{
 		db:                db,
