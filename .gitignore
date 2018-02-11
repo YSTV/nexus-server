@@ -3,3 +3,5 @@ config.toml
 gin-bin
 *.swp
 dev.db
+dist
+vendor
